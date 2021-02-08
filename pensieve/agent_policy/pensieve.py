@@ -58,7 +58,7 @@ class Pensieve(BaseAgentPolicy):
         self.randomization_interval = randomization_interval
         self.replay_buffer = ReplayBuffer()
 
-    def train(self, train_envs, val_envs=None, test_envs=None, iters=1e5,
+    def train(self, args, train_envs, val_envs=None, test_envs=None, iters=1e5,
               reference_agent_policy=None, use_replay_buffer=False):
         for net_env in train_envs:
             net_env.reset()
@@ -87,7 +87,7 @@ class Pensieve(BaseAgentPolicy):
         for i in range(self.num_agents):
             agents[i].start()
 
-        self.central_agent(net_params_queues, exp_queues, iters, train_envs,
+        self.central_agent(args, net_params_queues, exp_queues, iters, train_envs,
                            val_envs, test_envs, use_replay_buffer)
 
         # wait unit training is done
@@ -112,7 +112,8 @@ class Pensieve(BaseAgentPolicy):
             time_stamp += info['delay']  # in ms
             time_stamp += info['sleep_time']  # in ms
 
-            results.append([time_stamp / M_IN_K, VIDEO_BIT_RATE[bit_rate],
+            results.append([net_env.trace_file_name,
+                            time_stamp / M_IN_K, VIDEO_BIT_RATE[bit_rate],
                             info['buffer_size'], info['rebuf'],
                             info['video_chunk_size'], info['delay'], reward])
 
@@ -152,7 +153,7 @@ class Pensieve(BaseAgentPolicy):
         if critic_model_path is not None:
             self.net.load_critic_model(critic_model_path)
 
-    def central_agent(self, net_params_queues, exp_queues, iters, train_envs,
+    def central_agent(self, args, net_params_queues, exp_queues, iters, train_envs,
                       val_envs, test_envs, use_replay_buffer):
         """Pensieve central agent.
 
@@ -182,7 +183,23 @@ class Pensieve(BaseAgentPolicy):
         val_log_writer.writerow(log_header)
 
         t_start = time.time()
+
         for epoch in range(int(iters)):
+            RLMPC_LOG = args.summary_dir
+            rl_path = os.path.join( RLMPC_LOG ,'RL_MPC_log' )
+            rl_file = open( rl_path ,'a' ,1 )
+
+            if epoch > 0 and epoch % 500 == 0:
+                mpc_group_reward = {'val_0-5': 0.120197564 ,'val_450-1050': 17.174864 ,'val_100-250': 5.4094496 ,
+                                    'val_FCC': 0.12147626 ,'val_250-450': 10.067421 ,'val_5-100': 1.7017897}
+                rl_results = self.evaluate_envs( test_envs )
+                rl_group_reward = test_group_reward( args.test_trace_dir ,rl_results )
+                RL_MPC = {key: mpc_group_reward[key] - rl_group_reward.get( key ,0 ) for key in rl_group_reward}
+
+                # log the RL-MPC test_group_reward
+                rl_file.write( str( RL_MPC ) + '\n' )
+
+
             # synchronize the network parameters of work agent
             actor_net_params = self.net.get_actor_param()
             actor_net_params = [params.detach().cpu().numpy()
@@ -263,7 +280,7 @@ class Pensieve(BaseAgentPolicy):
                 if test_envs is not None:
                     test_results = self.evaluate_envs(test_envs)
                     vid_rewards = np.array(
-                        [np.sum(np.array(vid_results)[1:, -1])
+                        [np.sum(np.array(vid_results)[1:, -1].astype(np.float32))
                          for vid_results in test_results])
                     test_log_writer.writerow([self.epoch + 1,
                                               np.min(vid_rewards),
@@ -351,6 +368,7 @@ def agent(agent_id, net_params_queue, exp_queue, net_envs, summary_dir,
 
             bit_rate, action_prob_vec = net.select_action(state)
             bit_rate = bit_rate.item()
+            print(bit_rate, "----bit_rate")
             # Note: we need to discretize the probability into 1/RAND_RANGE
             # steps, because there is an intrinsic discrepancy in passing
             # single state and batch states
@@ -508,3 +526,31 @@ def compare_mpc_pensieve(pensieve_abr, val_envs, param_ranges):
                                   boundaries[1:][range_idx])
     print(selected_ranges)
     return selected_ranges
+
+
+def test_group_reward(test_group_dir ,abr_results):
+    # These are based on the subdirectories of the test_trace_dir.
+    test_group_names = [os.path.basename( os.path.normpath( x[0] ) ) for x in os.walk( test_group_dir )][1:]
+    # Initialize groups.
+    test_groups = {}
+    for name in test_group_names:
+        test_groups[name] = []
+
+    # Iterate over results and sort into test_groups
+    for trace in abr_results:
+        first_chunk = trace[0]
+        filename = first_chunk[0]
+        for name in test_groups.keys():
+            if name in filename:
+                test_groups[name].append( trace )
+
+    chunk_reward_by_group = {}
+    for name in test_groups.keys():
+        # Extract only the video rewards.
+        # The reward is the last index in each vid_results array.
+        # The first value is not taken.
+        abr_vid_rewards = [np.array( vid_results )[1: ,-1] for vid_results in test_groups[name]]
+        abr_avg_chunk_reward = np.mean( np.concatenate( abr_vid_rewards ).astype( np.float64 ) )
+        chunk_reward_by_group[name] = abr_avg_chunk_reward
+
+    return chunk_reward_by_group

@@ -1,3 +1,6 @@
+import sys
+sys.path.append("../")
+
 import argparse
 import json
 import logging
@@ -7,7 +10,7 @@ import numpy as np
 
 from pensieve.agent_policy import Pensieve
 from pensieve.environment import Environment
-from pensieve.utils import load_traces
+from pensieve.utils import load_traces, load_traces_subdir
 
 
 def parse_args():
@@ -16,7 +19,7 @@ def parse_args():
     parser.add_argument('--description', type=str, default=None,
                         help='Optional description of the experiment.')
     # Training related settings
-    parser.add_argument('--num-agents', type=int, default=16,
+    parser.add_argument('--num-agents', type=int, default=4,
                         help='Num of worker agents. Defaults to 16.')
     parser.add_argument('--batch-size', type=int, default=100,
                         help='Take as a train batch.')
@@ -97,7 +100,7 @@ def main():
 
     # prepare train dataset
     if args.train_trace_dir is not None:
-        traces_time, traces_bw, traces_names = load_traces(
+        traces_time, traces_bw, traces_names = load_traces_subdir(
             args.train_trace_dir)
         train_envs = []
         for trace_idx, (trace_time, trace_bw, trace_filename) in enumerate(
@@ -150,7 +153,7 @@ def main():
     test_envs = None
     if args.test_trace_dir is not None:
         test_envs = []
-        traces_time, traces_bw, traces_names = load_traces(args.test_trace_dir)
+        traces_time, traces_bw, traces_names = load_traces_subdir(args.test_trace_dir)
         for trace_idx, (trace_time, trace_bw, trace_filename) in enumerate(
                 zip(traces_time, traces_bw, traces_names)):
             net_env = Environment(args.video_size_file_dir,
@@ -161,7 +164,7 @@ def main():
             test_envs.append(net_env)
 
     # test training
-    pensieve_abr.train(train_envs, val_envs=val_envs, test_envs=test_envs,
+    pensieve_abr.train(args, train_envs, val_envs=val_envs, test_envs=test_envs,
                        iters=args.total_epoch)
 
 
